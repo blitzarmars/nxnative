@@ -889,9 +889,13 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
         private const int GmemMapEntryWords = 8;
         private const int GmemHintShift = 21;
 
+<<<<<<< HEAD
         // nxnative: the write log (dmsh_abi.h DMSH_GMEM_LOG_*), reserved under the same sentinel slot at offset 1: a bitmap of the table entries the stores and atomics wrote through. The host
         // cannot know where a store through a loaded pointer lands before the GPU runs it, and it only wants the pools. Read first: a bit is set once, so nearly every store of a shader
         // that writes a whole frame costs a load, not an atomic (Ocarina of Time's movie compute ran at 41 ms a frame on a hash set of pages, which also ran out of slots)
+=======
+        // nxnative: the write log is a bitmap indexed by the entry the access uses. NDVE's full-frame writes used to overflow the page hash table even in a single pool.
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
         private const int GmemLogCbOffset = 1;
 
         // nxnative: a global memory access whose address the search traced to no storage buffer, an address the shader loaded from memory (Donkey Kong Bananza: gsys's vertex
@@ -952,6 +956,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 return context.Load(StorageKind.StorageBuffer, mapBinding, Const(0), context.IAdd(entry, Const(word)));
             }
 
+<<<<<<< HEAD
             Operand AtOrBelow(Operand high, Operand low)   // the address is at or above {low, high}
             {
                 return context.BitwiseOr(
@@ -981,10 +986,14 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             context.BranchIfTrue(lblChosen, lastHolds);
 
             // The hint of the address's 2 MiB chunk names an entry holding the whole chunk (dmsh_abi.h DMSH_GMEM_HINT_SHIFT). An address too high for the tag searches
+=======
+            // The host's tagged hint covers a whole chunk inside one entry. NDVE repeatedly accesses the same large pools from adjacent lanes.
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
             Operand chunk = context.BitwiseOr(context.ShiftLeft(addrHigh, Const(32 - GmemHintShift)), context.ShiftRightU32(addrLow, Const(GmemHintShift)));
             Operand indexMask = Const((1 << GmemMapLog2) - 1);
             Operand hint = MapWord(context.IMultiply(context.BitwiseAnd(chunk, indexMask), Const(GmemMapEntryWords)), 6);
             Operand hintIndex = context.BitwiseAnd(hint, indexMask);
+<<<<<<< HEAD
             Operand hintFits = context.BitwiseAnd(
                 context.BitwiseAnd(context.ICompareNotEqual(hintIndex, Const(0)), context.ICompareEqual(context.ShiftRightU32(hint, Const(GmemMapLog2)), chunk)),
                 context.ICompareLessUnsigned(addrHigh, Const(1 << (GmemHintShift - GmemMapLog2))));
@@ -992,6 +1001,16 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             context.BranchIfTrue(lblFound, hintFits);
 
             // The last entry whose start is at or below the address (entry 0 starts at 0, so there always is one)
+=======
+            Operand hintFits = context.BitwiseAnd(context.ICompareNotEqual(hintIndex, Const(0)), context.ICompareEqual(context.ShiftRightU32(hint, Const(GmemMapLog2)), chunk));
+            hintFits = context.BitwiseAnd(hintFits, context.ICompareLessUnsigned(addrHigh, Const(1 << (GmemHintShift - GmemMapLog2))));
+            Operand selected = Local();
+            Operand lblFound = Label();
+            context.Copy(selected, hintIndex);
+            context.BranchIfTrue(lblFound, hintFits);
+
+            // The last entry whose start is at or below the address (entry 0 starts at 0, so there always is one).
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
             Operand index = Const(0);
 
             for (int step = 1 << (GmemMapLog2 - 1); step != 0; step >>= 1)
@@ -1003,8 +1022,19 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
             context.Copy(selected, index);
             context.MarkLabel(lblFound);
+<<<<<<< HEAD
             context.Store(StorageKind.LocalMemory, lastBinding, selected);
             Operand found = context.IMultiply(selected, Const(GmemMapEntryWords));
+=======
+            Operand found = context.IMultiply(selected, Const(GmemMapEntryWords));
+            Operand endLow = MapWord(found, 2);
+            Operand endHigh = MapWord(found, 3);
+
+            Operand inPool = context.BitwiseOr(
+                context.ICompareLessUnsigned(addrHigh, endHigh),
+                context.BitwiseAnd(context.ICompareEqual(addrHigh, endHigh), context.ICompareLessUnsigned(addrLow, endLow)));
+
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
             Operand lblSkip = Label();
             context.BranchIfFalse(lblSkip, Below(MapWord(found, 3), MapWord(found, 2)));   // an address in no pool: the entry below it ends below it
 
@@ -1016,11 +1046,15 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             {
                 Operand word = context.ShiftRightU32(selected, Const(5));
                 Operand bit = context.ShiftLeft(Const(1), context.BitwiseAnd(selected, Const(31)));
+<<<<<<< HEAD
                 Operand lblLogged = Label();
 
                 context.BranchIfTrue(lblLogged, context.ICompareNotEqual(context.BitwiseAnd(context.Load(StorageKind.StorageBuffer, logBinding, Const(0), word), bit), Const(0)));
                 context.AtomicOr(StorageKind.StorageBuffer, logBinding, Const(0), word, bit);
                 context.MarkLabel(lblLogged);
+=======
+                context.AtomicOr(StorageKind.StorageBuffer, logBinding, Const(0), word, bit);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
             }
 
             // A small integer is read or written in its 32-bit word

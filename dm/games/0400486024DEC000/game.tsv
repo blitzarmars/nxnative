@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 # The Legend of Zelda: Ocarina of Time (Switch 2, update v131072)
 # Nintendo EPD's engine (sead / agl / gsys, Phive; project Owl, the Tears of the Kingdom engine's file layout), SDK 22.2.8 built for the Switch 2 (Ounce), NVN2 (Ampere shaders); modules main + subsdk0 (movie) + sdk.
 # Packed from a NUP container (scripts/pack_nup.py). Shaders: Shader/*.Nin_Ounce_NVN2.bfsha.zs (BNSH with Ampere code).
+=======
+# The Legend of Zelda: Ocarina of Time (Switch 2), base dump. Nintendo SDK 22.2.8, NVN2.
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 
 # ---- Identity ----
 title_id	0400486024DEC000
@@ -8,6 +12,7 @@ program_id	0400486024DEC000
 
 # ---- App ----
 name	The Legend of Zelda: Ocarina of Time
+<<<<<<< HEAD
 ipa	ZeldaOcarinaOfTime.ipa
 app_category	public.app-category.adventure-games
 pad_layout	full
@@ -28,10 +33,30 @@ zip_store	.zs:.bwav:.webm:.metallib
 mem_reserve	0x320000000
 mem_alias	0x100000000
 mem_map_limit	on
+=======
+ipa	OcarinaOfTime.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v0	v0	main=e0f3ccfaf50065ae4ea01eb5aeb13b1a	subsdk0=b0110087a7b339ef74588d3bd0b4dd5d	sdk=1643a838814f9c10c696f930ed681e7f
+package	v0
+shader_versions	v0
+
+# ---- Files ----
+modules	main subsdk0 sdk
+romfs_marker	Event/Movie/Dm_StaffCredit_0000.webm
+zip_store	.bwav:.webm:.zs:.metallib
+
+# ---- Memory ----
+# The NPDM declares 48 MiB of system resources. Startup requests a 6.20 GiB heap.
+mem_reserve	0x300000000
+mem_alias	0x98000000
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 mem_stack	0x10000000
 app_pool	0x240000000
 sys_resource	0x3000000
 
+<<<<<<< HEAD
 # ---- Shader split (shader_split.py) ----
 shader_groups	/Shader/=shader /Effect/=effect /Lib/=lib /UI/=layout
 shader_note	Ocarina of Time shaders
@@ -49,3 +74,13 @@ draw_barriers	game
 # As Tears of the Kingdom: the terrain's height, blend and hole maps are written by the CPU into textures after they are created. Without these keys they stay zero: holes in the ground and the wrong materials
 tex_flush_upload	on
 tex_dirty_upload	on
+=======
+# ---- Shader split ----
+shader_groups	/Shader/=shader /Lib/=lib /Effect/=effect /Layout2Shader/=layout /Movie/=movie
+shader_note	0400486024DEC000 shaders
+
+# ---- Graphics ----
+# agl wraps its depth clears in render conditions, as on Donkey Kong Bananza and Splatoon Raiders: in Kokiri Forest the main opaque pass tests EQUAL against a copy of the prepass depth
+# that a conditional clear (skipped on the console) wiped first, so no lit geometry landed and the full-screen sky showed through everywhere (a white scene)
+render_cond	on
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)

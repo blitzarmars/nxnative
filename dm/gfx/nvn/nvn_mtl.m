@@ -474,7 +474,11 @@ static want_list g_bf_want = {"DM_NVN_BF_WANT", PTHREAD_MUTEX_INITIALIZER}, g_du
 void bf_want_note(const char *key) { want_note(&g_bf_want, key); }
 
 // ---------- Memory pools ----------
+<<<<<<< HEAD
 typedef struct { uintptr_t lo, hi; uintptr_t base; __unsafe_unretained id<MTLBuffer> buf; uint64_t gpu; const void *key; int res; uint64_t born; uintptr_t end; uint64_t unk; uint32_t n_tex_reads, n_other; } pool_ent;   // res: already in the residency set (on demand, see pool_res); born: when it was added (ns); end, unk: a large pool's chunk (see BIG_MIN); n_tex_reads / n_other: lookups by texture uploads / by anything else (mem_census)
+=======
+typedef struct { uintptr_t lo, hi; uintptr_t base; __unsafe_unretained id<MTLBuffer> buf; uint64_t gpu; const void *key; int res; uintptr_t end; uint64_t unk; } pool_ent;   // res: already in the residency set (on demand, see pool_res); end, unk: a large pool's chunk (see BIG_MIN)
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 static pool_ent *g_pools; static int g_npool, g_cap;
 static int g_pidx_ok, g_plast = -1;   // whether the address→pool index is valid, the last hit (pool_find)
 static NSMutableArray *g_keep;                  // Holds the buffer references (pool_ent has non-owning pointers)
@@ -745,7 +749,7 @@ void mtl_pool_add(const void *mem, uint64_t size) {
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cap) { g_cap = g_cap ? g_cap * 2 : 64; g_pools = realloc_or_die(g_pools, g_cap * sizeof *g_pools, "the memory pool table"); }
     g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);   // the address index and the per-thread caches are invalid (pool_find, pc_get)
-    g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0, clock_gettime_nsec_np(CLOCK_MONOTONIC), hi, 1};   // not in the residency set yet: put in the first time it is addressed (pool_res)
+    g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0, hi, 1};   // not in the residency set yet: put in the first time it is addressed (pool_res)
     g_pool_adds++;
     [g_keep addObject:buf];
     pthread_mutex_unlock(&g_mu);
@@ -797,7 +801,7 @@ static int big_new(big_pool *b, uintptr_t lo, uintptr_t hi, uintptr_t end, uint6
     if (!buf) { MLOG("[RED] memory pool %p: the zero-copy buffer over %#lx..%#lx was refused", b->mem, (unsigned long)lo, (unsigned long)end); return -1; }
     if (g_npool == g_cap) { g_cap = g_cap ? g_cap * 2 : 64; g_pools = realloc_or_die(g_pools, g_cap * sizeof *g_pools, "the memory pool table"); }
     g_pidx_ok = 0; atomic_fetch_add(&g_pool_gen, 1);
-    g_pools[g_npool++] = (pool_ent){lo < b->lo ? b->lo : lo, hi > b->hi ? b->hi : hi, lo, buf, buf.gpuAddress, b->mem, 0, clock_gettime_nsec_np(CLOCK_MONOTONIC), end > b->hi ? b->hi : end, unk};
+    g_pools[g_npool++] = (pool_ent){lo < b->lo ? b->lo : lo, hi > b->hi ? b->hi : hi, lo, buf, buf.gpuAddress, b->mem, 0, end > b->hi ? b->hi : end, unk};
     [g_keep addObject:buf];
     return g_npool - 1;
 }
@@ -1230,6 +1234,7 @@ void *objc_autoreleasePoolPush(void); void objc_autoreleasePoolPop(void *);
 static void *g_sub_pool;
 static int tbdr_on(void);
 static void treg_finish_submission(void);
+static void ghost_finish_submission(void);
 
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
 // The first submission: the prepare step (warm_start), before anything of it is encoded. No GPU work: the submit entry (hle_nvn.c) calls it outside the graphics gate
@@ -2154,8 +2159,12 @@ uint64_t mtl_sub_commit(void) {
     gmem_commit_patch();
     g_cut_copy = 0;
     treg_finish_submission();   // Late descriptor views retire behind this submission's fence.
+<<<<<<< HEAD
     rt_preserve_bound();   // The game may reuse completed command memory; queue bindings must not point into its texture snapshots.
     queue_program_preserve(); // Submitted metadata may retire while these programs remain bound.
+=======
+    ghost_finish_submission();
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     uint64_t fence = ++g_fence;
     gw_commit(fence); rc_commit(fence);
     if (g_vis_ring_i >= 0) g_vis_ring[g_vis_ring_i].fence = fence;
@@ -2292,7 +2301,7 @@ static void hm_del_id(nvn_hmap *m, const void *k) { void *old = nvn_hm_del(m, k)
 static nvn_hmap g_by_serial = {.klen = 8};     // Serial → MTLTexture / NvPkg / NvProg
 static pthread_mutex_t g_smu = PTHREAD_MUTEX_INITIALIZER;
 // Serial table generation: +1 when entries are added / removed or a packaged texture is replaced. Downstream caches (texture views, programs) record the generation at fetch time; if it is unchanged they can be used directly without another table lookup
-static _Atomic uint64_t g_ser_gen = 1;
+static _Atomic uint64_t g_ser_gen = 1, g_prog_gen = 1;   // programs share the lookup table, but do not change texture IDs
 // Which serial each change was about, for the texture ID cache (ser_sync): a site that changes one serial's object bumps g_ser_gen through ser_note; any other bump (the sharing table,
 // upgrades, a dropped upload) has no note, and the next ser_sync then sends every texture ID down the slow path as before. A full list is the same as a missing note
 enum { SER_NOTES = 64 };
@@ -2429,6 +2438,12 @@ void mtl_alias_drop_pool(const void *pool) {
 // every texture ID down the slow path and made the next walk build the 33,025-entry table whole. Caller holds g_smu
 enum { ALIAS_IDLE = 16 };
 static uint64_t g_alias_taken;   // shared textures evicted when another texture took over their storage (for the memory report)
+<<<<<<< HEAD
+=======
+static nvn_hmap g_ghost;   // defined below (finalized texture serials)
+static nvn_hmap g_ghost_active = {.klen = 8};   // finalized serials touched in the submission being encoded, under g_smu
+static int serial_holds(nvn_hmap *m, id o) { for (uint32_t i = 0; i < m->cap; i++) if (m->vals[i] == (__bridge void *)o) return 1; return 0; }
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 static void alias_take_over(const alias_key *nk) {
     nvn_texlayout L; nvn_tex_layout(&nk->d, &L);
     if (!L.size) return;
@@ -2449,13 +2464,39 @@ static void alias_take_over(const alias_key *nk) {
         nvn_hm_del(&g_alias_seen, &ks[j]);
         id o = CFBridgingRelease(old);
         if (g_alias_set) CFSetRemoveValue(g_alias_set, (__bridge const void *)o);
+<<<<<<< HEAD
         defer_obj_release(o);
+=======
+        if (serial_holds(&g_ghost, o) || serial_holds(&g_ghost_active, o)) defer_obj_unref(o); else defer_obj_release(o);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     }
     if (n) { ser_note(0); g_alias_taken += n; }
 }
 static __unsafe_unretained id serial_get(uint64_t k) { pthread_mutex_lock(&g_smu); __unsafe_unretained id o = hm_get_id(&g_by_serial, &k); pthread_mutex_unlock(&g_smu); return o; }
+<<<<<<< HEAD
 static void serial_put(uint64_t k, id o) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) { held_add((__bridge void *)old, -1); if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); } hm_put_id(&g_by_serial, &k, o); held_add((__bridge void *)o, 1); ser_note(k); pthread_mutex_unlock(&g_smu); }
 static void serial_del(uint64_t k) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) { held_add((__bridge void *)old, -1); if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); hm_del_id(&g_by_serial, &k); ser_note(k); } pthread_mutex_unlock(&g_smu); }   // nothing to drop: the texture ID caches stay valid
+=======
+static int serial_is_program(id o);
+static void serial_put(uint64_t k, id o) {
+    pthread_mutex_lock(&g_smu);
+    id old = hm_get_id(&g_by_serial, &k);
+    if (old) { if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); }
+    hm_put_id(&g_by_serial, &k, o);
+    if (serial_is_program(o)) g_prog_gen++; else ser_note(k);
+    pthread_mutex_unlock(&g_smu);
+}
+static void serial_del(uint64_t k) {
+    pthread_mutex_lock(&g_smu);
+    id old = hm_get_id(&g_by_serial, &k);
+    if (old) {
+        if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old);
+        hm_del_id(&g_by_serial, &k);
+        if (serial_is_program(old)) g_prog_gen++; else ser_note(k);
+    }
+    pthread_mutex_unlock(&g_smu);
+}
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 // Texture serials owned by a live NVN texture object (TextureInitialize until Finalize or re-initialization, hle_nvn.c). Command records and texture pool registrations snapshot the
 // texture object (tex_snap in hle_nvn.c, mtl_reg_tex), so replay can resolve a texture the game has already finalized: Breath of the Wild records each frame's transient render targets
 // (the HUD captures, the 640x360 half-resolution buffers) and finalizes their objects before it submits. Those serials went back into g_by_serial and stayed there for good, as no second
@@ -2500,12 +2541,25 @@ void mtl_tex_unpin(uint64_t serial) {
     pthread_mutex_unlock(&g_smu);
 }
 static __unsafe_unretained id tex_get(uint64_t k) {
+<<<<<<< HEAD
     pthread_mutex_lock(&g_smu); __unsafe_unretained id o = hm_get_id(&g_by_serial, &k); if (!o && g_ghost.n) o = hm_get_id(&g_ghost, &k); if(!o) { tex_pin *pin=nvn_hm_get(&g_tex_pins,&k); if(pin) o=(__bridge id)pin->object; } pthread_mutex_unlock(&g_smu); return o;
+=======
+    pthread_mutex_lock(&g_smu);
+    __unsafe_unretained id o = hm_get_id(&g_by_serial, &k);
+    if (!o && g_ghost_active.n) o = hm_get_id(&g_ghost_active, &k);
+    if (!o && g_ghost.n && (o = hm_get_id(&g_ghost, &k)) && on_sub_thread() && g_cb) hm_put_id(&g_ghost_active, &k, o);
+    pthread_mutex_unlock(&g_smu);
+    return o;
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 }
 static void tex_put(uint64_t k, id o) {   // serials from 2^62 up are external textures (mtl_ext_tex), never initialized by the game
     pthread_mutex_lock(&g_smu);
-    nvn_hmap *m = k >= (1ull << 62) || nvn_hm_get(&g_tex_live, &k) ? &g_by_serial : &g_ghost;
+    int live = k >= (1ull << 62) || nvn_hm_get(&g_tex_live, &k);
+    id active = live ? nil : hm_get_id(&g_ghost_active, &k);
+    nvn_hmap *m = live ? &g_by_serial : &g_ghost;
+    if (active && !hm_get_id(&g_ghost, &k)) m = &g_ghost_active;
     id old = hm_get_id(m, &k);
+<<<<<<< HEAD
     if (old) count_add(m == &g_by_serial ? &g_by_serial_held : &g_ghost_held, (__bridge void *)old, -1);
     if (old) obj_drop(old);
     else if (m == &g_ghost) {
@@ -2515,6 +2569,33 @@ static void tex_put(uint64_t k, id o) {   // serials from 2^62 up are external t
     }
     hm_put_id(m, &k, o); tex_pin *pin=nvn_hm_get(&g_tex_pins,&k); if(pin) tex_pin_set(pin,o); ser_note(k);
     count_add(m == &g_by_serial ? &g_by_serial_held : &g_ghost_held, (__bridge void *)o, 1);
+=======
+    if (old) { if (old != o) obj_drop(old); }
+    else if (m == &g_ghost) {
+        uint64_t *slot = &g_ghost_ring[g_ghost_next++ % NGHOST];
+        if (*slot) {
+            id ev = hm_get_id(&g_ghost, slot);
+            if (ev != hm_get_id(&g_ghost_active, slot)) { obj_drop(ev); ser_note(*slot); }
+            hm_del_id(&g_ghost, slot);
+        }
+        *slot = k; g_ghost_puts++;
+    }
+    hm_put_id(m, &k, o); ser_note(k);
+    if (m == &g_ghost && (active || (on_sub_thread() && g_cb))) hm_put_id(&g_ghost_active, &k, o);
+    pthread_mutex_unlock(&g_smu);
+}
+// A bindless pool can resolve more finalized textures than the small ghost ring holds, many times within one submission.
+// Keep the resolved backing until encoding ends, even after the ring evicts it. Release only the overflow behind the submission's fence.
+static void ghost_finish_submission(void) {
+    pthread_mutex_lock(&g_smu);
+    for (uint32_t i = 0; i < g_ghost_active.cap && g_ghost_active.n; i++) {
+        void *v = g_ghost_active.vals[i]; if (!v) continue;
+        const void *key = g_ghost_active.keys + (size_t)i * g_ghost_active.klen;
+        if (nvn_hm_get(&g_ghost, key) != v) { obj_drop((__bridge id)v); uint64_t serial; memcpy(&serial, key, sizeof serial); ser_note(serial); }
+        CFRelease(v);
+    }
+    if (g_ghost_active.n) nvn_hm_clear(&g_ghost_active, NULL);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     pthread_mutex_unlock(&g_smu);
 }
 // Host record of a packaged texture: the current MTLTexture, the upload stamp, and the global write generation at the last check
@@ -2759,8 +2840,8 @@ static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> asked, MTLTextu
         // so the others kept reading the old copy while writes went to the new one, and the old texture stayed in g_alias_set. Slots are replaced in place (no insert, so no table resize during the walk);
         // the old texture is retired once the submissions that used it complete, the view caches follow g_ser_gen (PR #107)
         pthread_mutex_lock(&g_smu);
-        nvn_hmap *tables[] = {&g_by_serial, &g_ghost}; int named = 0, shared = 0;
-        for (unsigned j = 0; j < 2; j++) for (uint32_t i = 0; i < tables[j]->cap; i++) {
+        nvn_hmap *tables[] = {&g_by_serial, &g_ghost, &g_ghost_active}; int named = 0, shared = 0;
+        for (unsigned j = 0; j < sizeof tables / sizeof tables[0]; j++) for (uint32_t i = 0; i < tables[j]->cap; i++) {
             if (tables[j]->vals[i] != (__bridge void *)base) continue;
             uint64_t serial; memcpy(&serial, tables[j]->keys + (size_t)i * tables[j]->klen, sizeof serial);
             void *old = tables[j]->vals[i]; tables[j]->vals[i] = (void *)CFBridgingRetain(upgraded);
@@ -5370,6 +5451,7 @@ typedef struct { int8_t fx[32]; uint8_t fbmask, lmap[8]; } bf_key;
 #include "nvn_feedback.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; char gs_miss[17]; NvProg *geo_raster, *geo_lean_raster; int8_t c_sw, c_iw, c_img; } @end   // c_sw / c_iw / c_img: prog_swrites, udc_note_draw's image write, image_prepare's written image slots; + 1 once known (the shaders are fixed once made)   // geo_raster: GS output reader paired with this program's fragment stage; geo_lean_raster: its own vertex and fragment stages (a lean passthrough kernel)
 @implementation NvProg @end
+static int serial_is_program(id o) { return [o isKindOfClass:NvProg.class]; }
 // Warm-up entry: built in the background, waiting to be taken by the submit thread. vs / fs are strong references (in pso they are only raw pointers, and the background dictionary is released when the task ends)
 @interface WarmItem : NSObject { @public int kind, record; NSString *key, *vs_key, *fs_key; NvShader *shader, *vs, *fs; pso_key pso; id<MTLFunction> fsfn; id object; } @end   // record: a prefetched library, written to the prewarm lists when claimed (shader_get's lines)
 @implementation WarmItem @end
@@ -5763,7 +5845,7 @@ static void up_mfx_read_color(NvShader *cs, const NVNshaderData *sd);
 static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only on the submit thread
     prog_t *p = (prog_t *)cp;
     static const prog_t *lp; static uint64_t lser, lgen; static NvProg *lpr;   // Last result: same object, same serial and unchanged serial table means it is used directly
-    uint64_t gen = g_ser_gen;
+    uint64_t gen = g_prog_gen;
     if (p == lp && p->serial == lser && gen == lgen && lpr) return lpr;
     __unsafe_unretained NvProg *have = p->serial ? serial_get(p->serial) : nil;
     if (have) { lp = p; lser = p->serial; lgen = gen; lpr = have; return have; }
@@ -8983,6 +9065,7 @@ static uint64_t dummy_samp_rid(void) { static uint64_t rid; if (!rid) rid = dumm
 // as ubo_tex_id adds), the dummy where an ID holds nothing or a texture of another type, and the dummy at n for IDs past the table. Patched or rebuilt when a registration or a texture's
 // storage changes (g_reg_gen, g_ser_gen); the old buffer goes when the submissions that used it have completed. Every texture is in the residency set already (res_add at creation). Caller holds g_rmu
 #define POOL_SNAPS 16
+<<<<<<< HEAD
 // Each table keeps two lists of IDs, so that a change takes again only the IDs it can reach (n -1: more than POOL_IDS_MAX of them, and that change builds the table whole):
 // dead: the IDs a texture table holds the dummy for because their storage did not exist (pool_entry), which a memory pool added later can bring (REG_POOL);
 // trans: the IDs whose entry is a view of a retired registration made in submission sub, which goes at that submission's end (treg_finish_submission), so the next submission
@@ -8990,6 +9073,9 @@ static uint64_t dummy_samp_rid(void) { static uint64_t rid; if (!rid) rid = dumm
 enum { POOL_IDS_MAX = 1024 };
 typedef struct { int *v, n, cap; } pool_ids;
 typedef struct { __strong id<MTLBuffer> buf; uint64_t gpu, reg, ser, frame, sub; int samp, dtt, dpf, base, left, left_req; pool_ids dead, trans; } pool_snap;
+=======
+typedef struct { __strong id<MTLBuffer> buf; uint64_t gpu, reg, ser, sub; int samp, dtt, dpf, base; } pool_snap;
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 static pool_snap g_psnap[POOL_SNAPS]; static unsigned g_psnap_next;
 static uint64_t g_psnap_gen = 1;   // bumped by each rebuild or patch: an argument block holding a pool address is not reused past it (encode_args_)
 static uint64_t g_stat_pool_builds; static double g_stat_pool_ms;
@@ -9153,12 +9239,17 @@ static uint64_t pool_entry(int samp, int dtt, int id_, uint64_t limit, int *gone
     return tr;
 }
 static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretained id<MTLBuffer> *out) {
+<<<<<<< HEAD
     pool_seen_scan();
     uint64_t rg = atomic_load(&g_reg_gen), sg = samp ? 0 : atomic_load(&g_ser_gen);   // a sampler table follows registrations alone
+=======
+    uint64_t rg = atomic_load(&g_reg_gen), sg = samp ? 0 : atomic_load(&g_ser_gen);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     pool_snap *p = NULL, *free_ = NULL;
     for (int i = 0; i < POOL_SNAPS && !p; i++) { pool_snap *q = &g_psnap[i];
         if (!q->buf) { if (!free_) free_ = q; }
         else if (q->samp == samp && q->dtt == dtt && q->dpf == dpf && q->base == base) p = q; }
+<<<<<<< HEAD
     int stale = p && p->sub && p->sub != g_sub_serial;   // its transient entries name views that went at the end of submission p->sub
     int walk_on = p && p->left && p->frame != atomic_load(&g_cur_frame) && (p->left_req || !pool_budget_full());   // left: the walk goes on next frame, unless the budget has no room and nothing read waits: another walk would build the same table
     if (p && p->reg == rg && p->ser == sg && !stale && !walk_on) { *out = p->buf; return p->gpu; }
@@ -9227,12 +9318,16 @@ static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretain
     if (g_walk_sub != g_sub_serial) { g_walk_sub = g_sub_serial; g_walk_ms = 0; }
     if (p && p->buf && g_walk_ms >= POOL_SUB_MS && !stale) { *out = p->buf; return p->gpu; }
     g_stat_pool_why[!p ? 0 : p->ser != sg ? 2 : p->reg != rg ? 1 : stale ? 3 : 4]++;
+=======
+    if (p && p->reg == rg && p->ser == sg && (!p->sub || p->sub == g_sub_serial)) { *out = p->buf; return p->gpu; }
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     if (!p) p = free_ ? free_ : &g_psnap[g_psnap_next++ % POOL_SNAPS];
     uint64_t t0 = mach_absolute_time();
     int n = (samp ? g_nsreg : g_ntreg) - base; if (n < 1) n = 1;
     id<MTLBuffer> b = pool_table_take(DMSH_POOL_HEAD + 8 * (size_t)(n + 1));
     uint8_t *c = b.contents; *(uint32_t *)c = (uint32_t)n; if (!samp) *(uint64_t *)(c + 8) = pool_seen_gpu();
     uint64_t *e = (uint64_t *)(c + DMSH_POOL_HEAD), dummy = samp ? dummy_samp_rid() : (dummy_tex(dtt, dpf) ? g_dummy_tex_rid[dtt % DMY_NT][dpf & 3] : 0);
+<<<<<<< HEAD
     int real = 0, gone = 0, left = 0, left_req = 0; uint64_t limit = samp ? UINT64_MAX : pool_walk_limit(base, n);
     pool_ids nd = {0}, nt = {0}; ids_begin(0); ids_begin(1);
     for (int i = 0; i < n; i++) {
@@ -9245,6 +9340,27 @@ static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretain
     pool_table_give(p->buf); free(p->dead.v); free(p->trans.v);
     // Retired registrations drop their views at submission end; their resource IDs cannot outlive that submission (trans, taken again by the next one)
     *p = (pool_snap){b, b.gpuAddress, rg, sg, atomic_load(&g_cur_frame), nt.n ? g_sub_serial : 0, samp, dtt, dpf, base, left, left_req, nd, nt};
+=======
+    int real = 0, gone = 0, transient = 0;
+    for (int i = 0; i < n; i++) {
+        int id_ = base + i; uint64_t r = 0;
+        if (id_ <= 0) {}
+        else if (samp) { if (g_sreg_ok[id_] && samp_fast(id_)) r = g_srid[id_]; }
+        else if (g_treg[id_].ok && (g_treg[id_].gone || (!g_treg[id_].view && !tex_storage_live(&g_treg[id_].t)))) gone++;
+        else if (g_treg[id_].ok) {
+            void *tv = NULL; uint64_t tr = tex_fast_rid(id_, &tv);
+            if (tv && ((__bridge id<MTLTexture>)tv).textureType == (MTLTextureType)dtt) {
+                r = tr; transient |= g_treg[id_].retired;
+            }
+        }
+        e[i] = r ? r : dummy; real += r != 0;
+    }
+    e[n] = dummy;
+    res_add(b);
+    if (p->buf) defer_obj_release(p->buf);
+    // Retired registrations drop their views at submission end; their resource IDs cannot outlive that submission.
+    *p = (pool_snap){b, b.gpuAddress, rg, sg, transient ? g_sub_serial : 0, samp, dtt, dpf, base};
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     g_psnap_gen++;
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     double ms = (double)(mach_absolute_time() - t0) * tb.numer / tb.denom / 1e6; g_stat_pool_ms += ms;
@@ -9430,6 +9546,7 @@ static id<MTLBuffer> gmem_map(void) {
         uint64_t e[3] = {lo, hi, p->gpu - p->base}; memcpy(t + (size_t)n++ * DMSH_GMEM_MAP_ENTRY, e, sizeof e); end = hi;
     }
     pthread_mutex_unlock(&g_mu);
+<<<<<<< HEAD
     // Each 2 MiB chunk wholly inside an entry gets a hint, so most accesses skip the binary search. A colliding chunk replaces the hint and the shader's tag check sends the other to the search
     for (int k = 1; k < n; k++) {
         const uint64_t *e = (const uint64_t *)(t + (size_t)k * DMSH_GMEM_MAP_ENTRY);
@@ -9437,6 +9554,18 @@ static id<MTLBuffer> gmem_map(void) {
         for (uint64_t c = first; c < last && c < (1ull << (32 - 13)); c++) {
             uint32_t hint = (uint32_t)(c << 13 | (unsigned)k);
             memcpy(t + (size_t)(c % DMSH_GMEM_MAP_ENTRIES) * DMSH_GMEM_MAP_ENTRY + 24, &hint, sizeof hint);
+=======
+    // A hint can name a pool only if the entire chunk is inside its entry. Collisions replace the hint; the shader checks the chunk tag before using it.
+    for (int k = 1; k < n; k++) {
+        const uint64_t *range = (const void *)(t + (size_t)k * DMSH_GMEM_MAP_ENTRY);
+        const uint64_t chunk_size = 1ull << DMSH_GMEM_HINT_SHIFT;
+        uint64_t first = range[0] / chunk_size + (range[0] % chunk_size != 0);
+        uint64_t last = MIN(range[1] / chunk_size, (UINT32_MAX + 1ull) / DMSH_GMEM_MAP_ENTRIES);
+        for (uint64_t chunk = first; chunk < last; chunk++) {
+            size_t off = (chunk & (DMSH_GMEM_MAP_ENTRIES - 1)) * DMSH_GMEM_MAP_ENTRY + 6 * sizeof(uint32_t);
+            uint32_t hint = (uint32_t)(chunk * DMSH_GMEM_MAP_ENTRIES + (unsigned)k);
+            memcpy(t + off, &hint, sizeof hint);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
         }
     }
     if (over) RED_ONCE(140, "raw global memory: %d more memory pools than the %d entries of the pool table; addresses in them are not reached", over, DMSH_GMEM_MAP_ENTRIES - 1);
@@ -9445,6 +9574,7 @@ static id<MTLBuffer> gmem_map(void) {
     g_gmem_buf = b; g_gmem_gen = gen;
     { static int said; if (!said++) MLOG("raw global memory: pool table of %d ranges (pool generation %llu), rebuilt whenever a pool comes or goes", n - 1, (unsigned long long)gen); }
     return b;
+<<<<<<< HEAD
 }
 static uint64_t gmem_map_gpu(void) { return gmem_map().gpuAddress; }
 // An argument block holds the pool table that was current when it was encoded. A pool made after that, later in the submission or on another thread while it is encoded, is not in it, and a raw
@@ -9517,31 +9647,92 @@ static void gml_read(id<MTLBuffer> b, id<MTLBuffer> map, int predicted, uint64_t
     // pool is missed the same way and every miss is checked (g_gsr)
     if (added && g_gml_stable < GML_STABLE) g_gml_stable = 0; else if (g_gml_stable < INT_MAX) g_gml_stable++;
     if (predicted && added) g_gml_miss += added;
+=======
+}
+// The bitmap records the table entries the GPU actually used. NDVE's full-frame writes overflowed the old page hash log even within one pool.
+// Until the learned set stays unchanged for two logs, the stores count as writes anywhere. Later misses add their ranges and check the shadows that used the prediction.
+// Restarting learning after each miss made subsequent geometry draws wait on the GPU (geo_cpu_hazard), giving Donkey Kong Bananza streaks of 400-2,000 ms frames.
+enum { GML_WORDS = DMSH_GMEM_MAP_ENTRIES / 32, GML_BYTES = GML_WORDS * sizeof(uint32_t), GML_MAX = 4096, GML_STABLE = 2 };
+static pthread_mutex_t g_gml_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_gml_lo[GML_MAX], g_gml_hi[GML_MAX];
+static int g_gml_n, g_gml_stable, g_gml_over;
+static uint64_t g_gml_logs, g_gml_miss;
+static NSMutableArray<id<MTLBuffer>> *g_gml_free;
+static void gml_read(id<MTLBuffer> b, id<MTLBuffer> map, int predicted, uint64_t fence) {
+    const uint32_t *w = b.contents;
+    const uint64_t *ranges = map.contents;
+    int added = 0, missed = 0, shadowed = 0;
+    int nr = 0, unchecked = 0;
+    static uint64_t rlo[GSR_N], rhi[GSR_N];   // completion handlers run one at a time
+    if (predicted >= 0) {
+        pthread_mutex_lock(&g_gsr_mu);
+        uint64_t n = g_gsr_n, first = n > GSR_N ? n - GSR_N : 0;
+        if (first && g_gsr[first % GSR_N].fence >= fence) unchecked = 1;
+        for (uint64_t i = first; i < n; i++) if (g_gsr[i % GSR_N].fence >= fence) {
+            rlo[nr] = g_gsr[i % GSR_N].lo; rhi[nr++] = g_gsr[i % GSR_N].hi;
+        }
+        pthread_mutex_unlock(&g_gsr_mu);
+    }
+    pthread_mutex_lock(&g_gml_mu);
+    g_gml_logs++;
+    for (unsigned i = 0; i < GML_WORDS; i++) for (uint32_t bits = w[i]; bits; bits &= bits - 1) {
+        unsigned entry = i * 32 + (unsigned)__builtin_ctz(bits);
+        const uint64_t *range = ranges + entry * (DMSH_GMEM_MAP_ENTRY / sizeof *ranges);
+        uint64_t lo = range[0], hi = range[1];
+        if (lo >= hi) continue;
+        int k = 0;
+        while (k < g_gml_n && !(lo >= g_gml_lo[k] && hi <= g_gml_hi[k])) k++;
+        if (predicted >= 0 && k >= predicted) {
+            missed++;
+            for (int j = 0; j < nr; j++) if (lo < rhi[j] && rlo[j] < hi) { shadowed++; break; }
+        }
+        if (k == g_gml_n) {
+            if (g_gml_n == GML_MAX) { g_gml_over = 1; continue; }
+            g_gml_lo[g_gml_n] = lo; g_gml_hi[g_gml_n++] = hi; added++;
+        }
+    }
+    if (g_gml_stable < GML_STABLE) g_gml_stable = added ? 0 : g_gml_stable + 1;
+    g_gml_miss += (unsigned)missed;
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     uint64_t logs = g_gml_logs, miss = g_gml_miss; int learned = g_gml_n, over = g_gml_over;
     [g_gml_free addObject:b];
     pthread_mutex_unlock(&g_gml_mu);
     if (over) RED_ONCE(141, "raw global memory: the stores wrote in more than %d pools: they count as a write anywhere from now on", GML_MAX);
+<<<<<<< HEAD
     if (predicted && added) {   // learned after the fact: harmful only if a shadow that relied on this submission's writes lies in a pool they missed
         static int lines; int bad = shadowed || unchecked;
         if (bad || lines++ < 8) MLOG("%sraw global memory: the stores wrote in %d pool(s) the host had not learned (log %llu, %llu such pools so far, %d learned; the pools were added %.0f-%.0f ms before): "
             "%d of them hold one of the %d uniform shadows taken from that submission on%s", bad ? "[RED] " : "", added, (unsigned long long)logs,
             (unsigned long long)miss, learned, age_lo < 1e30 ? age_lo : -1.0, age_hi, shadowed, nr,
             shadowed ? ": those shadows may have missed the write" : unchecked ? "; the shadow record had already wrapped, so not all could be checked" : ""); }
+=======
+    if (missed) {
+        static int lines; int bad = shadowed || unchecked;
+        if (bad || lines++ < 8) MLOG("%sraw global memory: %d written pool range(s) outside the prediction (log %llu, %llu misses, %d learned), %d overlap the %d uniform shadows taken from that submission on%s",
+            bad ? "[RED] " : "", missed, (unsigned long long)logs, (unsigned long long)miss, learned, shadowed, nr,
+            shadowed ? ": those shadows may have missed a write" : unchecked ? ": the shadow record had wrapped" : "");
+    }
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
 }
 static uint64_t gml_take(id<MTLBuffer> map) {
     pthread_mutex_lock(&g_gml_mu);
     if (!g_gml_free) g_gml_free = [NSMutableArray array];
     id<MTLBuffer> b = g_gml_free.lastObject; if (b) [g_gml_free removeLastObject];
-    int predict = !g_gml_over && g_gml_stable >= GML_STABLE;
-    { static int said; if (predict && !said++) MLOG("raw global memory: the stores' writes are predicted from now on: %d pool(s) learned over %llu logs", g_gml_n, (unsigned long long)g_gml_logs); }
-    if (predict) for (int i = 0; i < g_gml_n; i++) sbw_note(g_gml_lo[i], g_gml_hi[i] - g_gml_lo[i], SBW_GPU);
+    int predicted = !g_gml_over && g_gml_stable >= GML_STABLE ? g_gml_n : -1;
+    { static int said; if (predicted >= 0 && !said++) MLOG("raw global memory: the stores' writes are predicted from now on: %d pool(s) learned over %llu logs", predicted, (unsigned long long)g_gml_logs); }
+    for (int i = 0; i < predicted; i++) sbw_note(g_gml_lo[i], g_gml_hi[i] - g_gml_lo[i], SBW_GPU);
     pthread_mutex_unlock(&g_gml_mu);
-    if (!predict) sbw_note(0, 0, SBW_GPU);
+    if (predicted < 0) sbw_note(0, 0, SBW_GPU);
     if (!b) { b = [g_dev newBufferWithLength:GML_BYTES options:MTLResourceStorageModeShared]; res_add(b); res_commit(); }
     memset(b.contents, 0, GML_BYTES);
+<<<<<<< HEAD
     g_gml_on = 1; uint64_t fence = g_fence + 1;   // this submission's fence (mtl_sub_commit)
     NvGmlLog *log = [NvGmlLog new]; log->b = b; log->map = map; g_gml_last = log;
     [g_commit_blocks addObject:^{ gml_read(log->b, log->map, predict, fence); }];
+=======
+    g_gml_on = 1; uint64_t fence = g_fence + 1;
+    [g_commit_blocks addObject:^{ gml_read(b, map, predicted, fence); }];
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     return b.gpuAddress;
 }
 static id<MTLBuffer> zero_bank(void) { static __strong id<MTLBuffer> b; if (!b) { b = [g_dev newBufferWithLength:65536 options:MTLResourceStorageModeShared]; res_add(b); } return b; }
@@ -9732,6 +9923,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     static uint64_t bl_pass[6]; static int bl_all = -1; if (bl_all < 0) bl_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;   // Record on every new encode (otherwise only the first time per pass per stage)
     int bl = passdump() && (bl_all || g_kd_force || bl_pass[nvn_stage] != g_stat_pass);
     if (bl) { bl_pass[nvn_stage] = g_stat_pass; PD("K %llu st%d key=%s nb=%d", g_stat_pass, nvn_stage, sh->key[0] ? sh->key : sh->builtin ? sh->builtin : "?", sh->rf.nb); }
+    id<MTLBuffer> raw_map = nil;   // the log and shader use the same map even if pools change during encoding
     uint32_t bmask = 0; float bk[DMSH_BORDER_SAMPLERS][4];   // the border colour block (see nvn_border.h): the twins that correct, their factors
     os_unfair_lock_lock(&g_rmu);   // The texture / sampler registration tables may be being grown or rewritten by the game thread
     for (int i = 0; i < sh->rf.nb; i++) {
@@ -9918,10 +10110,16 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             id<MTLBuffer> cb = sh->c1buf ? sh->c1buf : zero_bank();   // c1 has length 0 (600 of them in the whole library) yet the shader still declares it: reads 0
             slots[aid] = (sh->c1buf ? sh->c1_gpu : zero_bank_gpu()) + (sh->c1buf ? sh->c1off : 0);
             USE(cb, MTLResourceUsageRead);
+<<<<<<< HEAD
         } else if (b->kind == NVN_RB_GMEM || b->kind == NVN_RB_GMEML) {   // B: the memory pool table for addresses traced to no storage buffer (gmem_map), and the write log of those stores (gml_take)
             if (!raw_map) raw_map = gmem_map();   // the log and the shader use the same table even if a pool comes in during the encode
             slots[aid] = b->kind == NVN_RB_GMEM ? raw_map.gpuAddress : gml_take(raw_map);
             if (b->kind == NVN_RB_GMEM) gmem_aid = aid; else gml_taken = 1;
+=======
+        } else if (b->kind == NVN_RB_GMEM || b->kind == NVN_RB_GMEML) {
+            if (!raw_map) raw_map = gmem_map();
+            slots[aid] = b->kind == NVN_RB_GMEM ? raw_map.gpuAddress : gml_take(raw_map);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
             if (bl && b->kind == NVN_RB_GMEM) PD("B %llu st%d gmem %s", g_stat_pass, nvn_stage, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SUPPORT) {   // support_buffer: scale 1.0, BGRA swap 0, viewport transform not disabled (viewport fields are not read)
             slots[aid] = support_gpu();
@@ -14013,9 +14211,9 @@ void mtl_exec(const uint8_t *p) {
             case OP_DRAW_IDX: { if (g_rc_skip) break; p_draw_idx t; g_exec_cur = p; g_exec_next = p + h.size; draw(NULL, draw_idx_rec(a, h.size, &t)); g_exec_next = NULL; break; }
             // Do not mark dirty if the state did not change (the game often re-sends the same program / state block / vertex format before each draw; the dirty flag only decides whether to re-fetch the pipeline / depth-stencil object, and equal values mean the same object)
             case OP_BIND_PROGRAM: { const p_bind_program *b = a; state_op(h.op,a);
-                if (passdump()) { NvProg *pr = S.prog ? prog_get(S.prog) : nil;
-                    PD("Y bind_program cmd=%p program=%p stages=%#x vs=%s fs=%s gs=%s",p,(void *)b->prog,b->stages,
-                       pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-",pr && pr->sh[2] ? pr->sh[2]->key : "-"); }
+                if (passdump()) { NvProg *pr = S.prog ? prog_get(S.prog) : nil, *cp = (b->stages & 0x20) && S.cprog ? prog_get(S.cprog) : nil;   // compute is bound apart (S.cprog)
+                    PD("Y bind_program cmd=%p program=%p stages=%#x vs=%s fs=%s gs=%s cs=%s",p,(void *)b->prog,b->stages,
+                       pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-",pr && pr->sh[2] ? pr->sh[2]->key : "-", cp && cp->sh[5] ? cp->sh[5]->key : "-"); }
                 break; }
             case OP_SCISSOR: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF: case OP_BIND_VBUF1:
             case OP_BIND_UBO: case OP_BIND_UBO_SMALL: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_STENCIL:

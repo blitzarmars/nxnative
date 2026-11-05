@@ -83,6 +83,7 @@ int main(void) { @autoreleasepool {
     CHECK("the texture holds what the pool holds", !memcmp(rb.contents, lin, 256 * 256 * 4));
     free(lin);
     mtl_tex_release(&t);
+<<<<<<< HEAD
     // Raw global memory: the driver has given out no address in the pool, so the table leaves it out and it stays in chunks
     mtl_sub_begin(); CHECK("pool table made", gmem_map_gpu() != 0); finish();
     CHECK("a pool with no address given out stays out", g_big[0].full == 0);
@@ -93,6 +94,18 @@ int main(void) { @autoreleasepool {
     // Once one is given out, the table reaches all of it, and lookups then have the whole pool
     mtl_pool_addressed((void *)(uintptr_t)(base + 900 * MB), 4096);
     mtl_sub_begin(); CHECK("pool table made again", gmem_map_gpu() != 0); finish();
+=======
+    // Raw global memory: the table reaches all of it, and lookups then have the whole pool
+    mtl_sub_begin(); id<MTLBuffer> old_map = gmem_map(); CHECK("pool table made", old_map != nil); finish();
+    const uint64_t *ranges = old_map.contents;
+    uint64_t chunk = (base + 900 * MB) >> DMSH_GMEM_HINT_SHIFT;
+    size_t hint_word = (chunk % DMSH_GMEM_MAP_ENTRIES) * (DMSH_GMEM_MAP_ENTRY / sizeof(uint32_t)) + 6;
+    uint32_t hint = ((const uint32_t *)old_map.contents)[hint_word];
+    unsigned entry = hint % DMSH_GMEM_MAP_ENTRIES;
+    const uint64_t *range = ranges + entry * (DMSH_GMEM_MAP_ENTRY / sizeof *ranges);
+    CHECK("the hint names its chunk and pool", entry && hint / DMSH_GMEM_MAP_ENTRIES == chunk);
+    CHECK("the entire hinted chunk lies within its pool range", range[0] <= chunk << DMSH_GMEM_HINT_SHIFT && range[1] >= (chunk + 1) << DMSH_GMEM_HINT_SHIFT);
+>>>>>>> 9fb44679 (The Legend of Zelda: Ocarina of Time renders Kokiri Forest: agl's conditional clears (render_cond), NVN2 task and mesh shaders in BNSH slots 7 and 8, the title movie at 60 fps, and the first 3D scene's residency)
     CHECK("the whole pool has an entry", g_big[0].full > 0 && g_pools[g_big[0].full - 1].end == base + GB);
     CHECK("lookups take it", look(base + 900 * MB, 4096).length == GB);
     // The lookup hint of a 2 MiB chunk: tagged with the chunk, names the entry holding all of it, and a chunk only partly inside has none of its own
@@ -159,6 +172,12 @@ int main(void) { @autoreleasepool {
     CHECK("only the small pool's entry is left of those added", g_npool == pools0 + 1);
     CHECK("the small pool still answers, its entry moved", look((uint64_t)(uintptr_t)small + 20, 16).length == 64 * MB);
     CHECK("the large pool's addresses do not", !mtl_gpu_addr(base + 100, 4, &mb, &mo, &gpu));
+    mtl_sub_begin(); id<MTLBuffer> new_map = gmem_map(); CHECK("pool table rebuilt", new_map && new_map != old_map); finish();
+    id<MTLBuffer> log = [g_dev newBufferWithLength:GML_BYTES options:MTLResourceStorageModeShared];
+    memset(log.contents, 0, GML_BYTES);
+    ((uint32_t *)log.contents)[entry / 32] = 1u << (entry % 32);
+    gml_read(log, old_map, -1, 0);
+    CHECK("a completed bitmap resolves its entry in the original map", g_gml_n == 1 && g_gml_lo[0] == range[0] && g_gml_hi[0] == range[1]);
     mtl_pool_del(small); mtl_drain();
     // A buffer made while any of its pages is write-protected (nvn_dirty_protect: a packaged texture's upload, an index range) drops every GPU write through it, with no error, even to pages
     // never protected (issue #1591). Each kind of zero-copy buffer over pool memory, made over a protected page, must still take the GPU's writes
